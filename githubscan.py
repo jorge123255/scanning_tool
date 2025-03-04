@@ -16,6 +16,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
+from reportlab.lib.units import inch
 import datetime
 
 # Set up logging for detailed feedback
@@ -1160,7 +1161,15 @@ def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf', tem
                             relative_path = os.path.basename(file_path)
                     else:
                         relative_path = os.path.basename(file_path)
-                    data.append([relative_path, str(line_num), desc, Paragraph(snippet[:50] + '...' if len(snippet) > 50 else snippet, styles['Normal'])])
+                    
+                    # Sanitize snippet to avoid XML parsing issues
+                    safe_snippet = str(snippet)
+                    if len(safe_snippet) > 50:
+                        safe_snippet = safe_snippet[:50] + '...'
+                    # Escape any special characters that might cause XML parsing issues
+                    safe_snippet = safe_snippet.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    
+                    data.append([relative_path, str(line_num), desc, Paragraph(safe_snippet, styles['Normal'])])
                 
                 table = Table(data, colWidths=[1.5*inch, 0.5*inch, 2*inch, 2*inch])
                 table.setStyle(TableStyle([
