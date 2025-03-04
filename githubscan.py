@@ -13,11 +13,18 @@ import base64
 import yaml
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, ListFlowable, ListItem
 from reportlab.lib import colors
 from reportlab.lib.units import inch
+from reportlab.graphics.shapes import Drawing
+from reportlab.graphics.charts.piecharts import Pie
+from reportlab.graphics.charts.barcharts import VerticalBarChart
+from reportlab.platypus import Flowable, KeepTogether
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 import datetime
+import io
+import hashlib
 
 # Set up logging for detailed feedback
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
@@ -1103,16 +1110,86 @@ def enrich_vulnerabilities(vulnerabilities):
 
 def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf', temp_dir=None):
     """Generate a professional PDF report of the findings, designed for non-technical audiences."""
+    # Extract repository name from URL
+    repo_name = repo_url.split('/')[-1].replace('.git', '')
+    scan_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
     doc = SimpleDocTemplate(output_file, pagesize=letter, leftMargin=0.5*inch, rightMargin=0.5*inch)
     styles = getSampleStyleSheet()
     story = []
 
+    # Add custom styles
+    styles.add(ParagraphStyle(
+        name='SectionHeading',
+        parent=styles['Heading2'],
+        fontSize=14,
+        spaceBefore=15,
+        spaceAfter=8,
+        textColor=colors.darkblue
+    ))
+    
+    styles.add(ParagraphStyle(
+        name='SubsectionHeading',
+        parent=styles['Heading3'],
+        fontSize=12,
+        spaceBefore=10,
+        spaceAfter=6,
+        textColor=colors.darkblue
+    ))
+    
+    styles.add(ParagraphStyle(
+        name='CodeSnippet',
+        parent=styles['Code'],
+        fontName='Courier',
+        fontSize=8,
+        wordWrap='CJK',
+        leftIndent=10,
+        rightIndent=10,
+        spaceBefore=2,
+        spaceAfter=2,
+        backColor=colors.lightgrey
+    ))
+    
+    styles.add(ParagraphStyle(
+        name='Caption',
+        parent=styles['Italic'],
+        fontSize=9,
+        alignment=TA_CENTER,
+        spaceBefore=4,
+        spaceAfter=10
+    ))
+    
+    styles.add(ParagraphStyle(
+        name='SeverityHeading',
+        parent=styles['Heading3'],
+        fontSize=12,
+        spaceBefore=10,
+        spaceAfter=6,
+        textColor=colors.red
+    ))
+    
+    styles.add(ParagraphStyle(
+        name='TopIssue',
+        parent=styles['Normal'],
+        fontSize=9,
+        leftIndent=20,
+        spaceBefore=2,
+        spaceAfter=2,
+        leading=12
+    ))
+
     # Title
-    story.append(Paragraph("Security Scan Report", styles['Title']))
+    title_style = styles['Title'].clone('CustomTitle')
+    title_style.alignment = TA_CENTER
+    title_style.textColor = colors.darkblue
+    
+    story.append(Paragraph(f"Security Scan Report - {repo_name}", title_style))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(f"Scan Date: {scan_date}", styles['Normal']))
     story.append(Spacer(1, 12))
 
     # Executive Summary
-    story.append(Paragraph("Executive Summary", styles['Heading2']))
+    story.append(Paragraph("Executive Summary", styles['SectionHeading']))
     severity_count = {'Critical': 0, 'High': 0, 'Medium': 0, 'Low': 0, 'Info': 0}
     for _, _, _, _, severity, _ in vulnerabilities:
         severity_count[severity] += 1
@@ -1121,24 +1198,215 @@ def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf', tem
     summary += f"Breakdown: {severity_count['Critical']} Critical, {severity_count['High']} High, {severity_count['Medium']} Medium, {severity_count['Low']} Low, {severity_count['Info']} Informational issues."
     story.append(Paragraph(summary, styles['Normal']))
     story.append(Spacer(1, 12))
+    
+    # Add severity scorecard
+    if len(vulnerabilities) > 0:
+        # Create a table for the severity scorecard
+        data = [
+            ["Severity", "Count", "Risk Level"],
+            ["Critical", str(severity_count['Critical']), ""],
+            ["High", str(severity_count['High']), ""],
+            ["Medium", str(severity_count['Medium']), ""],
+            ["Low", str(severity_count['Low']), ""],
+            ["Info", str(severity_count['Info']), ""]
+        ]
+        
+        # Add risk level indicators
+        risk_levels = ["", "", "", "", ""]
+        if severity_count['Critical'] > 0:
+            risk_levels[0] = "IMMEDIATE ACTION REQUIRED"
+        if severity_count['High'] > 0:
+            risk_levels[1] = "URGENT ACTION NEEDED"
+        if severity_count['Medium'] > 0:
+            risk_levels[2] = "ACTION RECOMMENDED"
+        if severity_count['Low'] > 0:
+            risk_levels[3] = "CONSIDER FIXING"
+        if severity_count['Info'] > 0:
+            risk_levels[4] = "FOR INFORMATION"
+            
+        for i in range(5):
+            data[i+1][2] = risk_levels[i]
+        
+        # Create the table
+        scorecard = Table(data, colWidths=[1.2*inch, 0.8*inch, 3*inch])
+        
+        # Style the table
+        scorecard.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('TOPPADDING', (0, 0), (-1, 0), 6),
+            # Critical row
+            ('BACKGROUND', (0, 1), (-1, 1), colors.pink),
+            ('TEXTCOLOR', (0, 1), (0, 1), colors.darkred),
+            ('FONTNAME', (0, 1), (0, 1), 'Helvetica-Bold'),
+            # High row
+            ('BACKGROUND', (0, 2), (-1, 2), colors.salmon),
+            ('TEXTCOLOR', (0, 2), (0, 2), colors.darkred),
+            ('FONTNAME', (0, 2), (0, 2), 'Helvetica-Bold'),
+            # Medium row
+            ('BACKGROUND', (0, 3), (-1, 3), colors.lightyellow),
+            ('TEXTCOLOR', (0, 3), (0, 3), colors.orange),
+            ('FONTNAME', (0, 3), (0, 3), 'Helvetica-Bold'),
+            # Low row
+            ('BACKGROUND', (0, 4), (-1, 4), colors.lightgreen),
+            ('TEXTCOLOR', (0, 4), (0, 4), colors.darkgreen),
+            ('FONTNAME', (0, 4), (0, 4), 'Helvetica-Bold'),
+            # Info row
+            ('BACKGROUND', (0, 5), (-1, 5), colors.lightblue),
+            ('TEXTCOLOR', (0, 5), (0, 5), colors.blue),
+            ('FONTNAME', (0, 5), (0, 5), 'Helvetica-Bold'),
+            # All cells
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ALIGN', (1, 1), (1, -1), 'CENTER'),
+        ]))
+        
+        story.append(scorecard)
+        story.append(Spacer(1, 12))
+        
+        # Top 3 Critical Issues
+        if severity_count['Critical'] > 0 or severity_count['High'] > 0:
+            story.append(Paragraph("Top Critical Issues", styles['SubsectionHeading']))
+            
+            # Get the top 3 critical or high issues
+            top_issues = []
+            for vuln in vulnerabilities:
+                file_path, line_num, desc, _, severity, _ = vuln
+                if severity in ['Critical', 'High'] and len(top_issues) < 3:
+                    if temp_dir and os.path.isabs(file_path):
+                        try:
+                            relative_path = os.path.relpath(file_path, temp_dir)
+                        except ValueError:
+                            relative_path = os.path.basename(file_path)
+                    else:
+                        relative_path = os.path.basename(file_path)
+                    
+                    top_issues.append((relative_path, line_num, desc, severity))
+            
+            # Add the top issues to the report
+            for i, (file, line, desc, severity) in enumerate(top_issues):
+                issue_text = f"<b>{i+1}. {desc}</b> in <i>{file}</i> (line {line}) - <font color='red'>{severity}</font>"
+                story.append(Paragraph(issue_text, styles['TopIssue']))
+            
+            story.append(Spacer(1, 12))
 
     # Risk Score
     total_risk_score = sum(vuln[5] for vuln in vulnerabilities)
-    max_possible_score = 10 * len(vulnerabilities)  # If all were critical
+    max_possible_score = 10 * len(vulnerabilities) if vulnerabilities else 1  # Avoid division by zero
     normalized_score = (total_risk_score / max_possible_score) * 100 if max_possible_score > 0 else 0
     
     risk_level = "Low"
+    risk_color = colors.green
     if normalized_score > 75:
         risk_level = "Critical"
+        risk_color = colors.red
     elif normalized_score > 50:
         risk_level = "High"
+        risk_color = colors.orange
     elif normalized_score > 25:
         risk_level = "Medium"
+        risk_color = colors.yellow
     
-    story.append(Paragraph("Overall Risk Assessment", styles['Heading2']))
+    story.append(Paragraph("Overall Risk Assessment", styles['SectionHeading']))
     story.append(Paragraph(f"Risk Score: {normalized_score:.1f}/100 ({risk_level} Risk)", styles['Normal']))
     story.append(Spacer(1, 12))
-
+    
+    # Add visual risk meter
+    if len(vulnerabilities) > 0:
+        # Create a horizontal bar chart for risk visualization
+        drawing = Drawing(400, 50)
+        
+        # Background bar (gray)
+        from reportlab.graphics.shapes import Rect
+        drawing.add(Rect(0, 15, 400, 20, fillColor=colors.lightgrey, strokeColor=None))
+        
+        # Colored bar representing the risk score
+        score_width = min(400, 400 * (normalized_score / 100))
+        drawing.add(Rect(0, 15, score_width, 20, fillColor=risk_color, strokeColor=None))
+        
+        # Add labels
+        from reportlab.graphics.shapes import String
+        drawing.add(String(0, 5, "Low", fontSize=8))
+        drawing.add(String(190, 5, "Medium", fontSize=8))
+        drawing.add(String(290, 5, "High", fontSize=8))
+        drawing.add(String(380, 5, "Critical", fontSize=8))
+        
+        story.append(drawing)
+        story.append(Spacer(1, 12))
+    
+    # Vulnerability Distribution
+    if len(vulnerabilities) > 0:
+        story.append(Paragraph("Vulnerability Distribution", styles['SectionHeading']))
+        
+        # Create a pie chart for severity distribution
+        drawing = Drawing(400, 200)
+        pie = Pie()
+        pie.x = 150
+        pie.y = 50
+        pie.width = 100
+        pie.height = 100
+        pie.data = [
+            severity_count['Critical'],
+            severity_count['High'],
+            severity_count['Medium'],
+            severity_count['Low'],
+            severity_count['Info']
+        ]
+        pie.labels = ['Critical', 'High', 'Medium', 'Low', 'Info']
+        pie.slices.strokeWidth = 0.5
+        
+        # Set colors for each severity level
+        pie.slices[0].fillColor = colors.red
+        pie.slices[1].fillColor = colors.orange
+        pie.slices[2].fillColor = colors.yellow
+        pie.slices[3].fillColor = colors.lightgreen
+        pie.slices[4].fillColor = colors.lightblue
+        
+        drawing.add(pie)
+        story.append(drawing)
+        story.append(Paragraph("Figure 1: Distribution of vulnerabilities by severity", styles['Caption']))
+        story.append(Spacer(1, 12))
+        
+        # Count vulnerability types
+        vulnerability_types = {}
+        for _, _, desc, _, _, _ in vulnerabilities:
+            vuln_type = desc.split(' - ')[0] if ' - ' in desc else desc
+            if vuln_type in vulnerability_types:
+                vulnerability_types[vuln_type] += 1
+            else:
+                vulnerability_types[vuln_type] = 1
+        
+        # Create a bar chart for top vulnerability types
+        if vulnerability_types:
+            # Sort and get top 5 vulnerability types
+            top_vulns = sorted(vulnerability_types.items(), key=lambda x: x[1], reverse=True)[:5]
+            
+            drawing = Drawing(400, 200)
+            bc = VerticalBarChart()
+            bc.x = 50
+            bc.y = 50
+            bc.height = 125
+            bc.width = 300
+            bc.data = [[v[1] for v in top_vulns]]
+            bc.strokeColor = colors.black
+            bc.valueAxis.valueMin = 0
+            bc.valueAxis.valueMax = max([v[1] for v in top_vulns]) + 1
+            bc.valueAxis.valueStep = 1
+            bc.categoryAxis.labels.boxAnchor = 'ne'
+            bc.categoryAxis.labels.dx = -8
+            bc.categoryAxis.labels.dy = -2
+            bc.categoryAxis.labels.angle = 30
+            bc.categoryAxis.categoryNames = [v[0][:20] for v in top_vulns]  # Truncate long names
+            
+            drawing.add(bc)
+            story.append(drawing)
+            story.append(Paragraph("Figure 2: Top vulnerability types by frequency", styles['Caption']))
+            story.append(Spacer(1, 12))
+    
     # Create a custom style for table cells with word wrapping
     cell_style = styles['Normal'].clone('CellStyle')
     cell_style.wordWrap = 'CJK'
@@ -1150,15 +1418,41 @@ def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf', tem
     file_style.fontSize = 8
     file_style.allowWidows = 1
     file_style.allowOrphans = 1
+    
+    # Create a code snippet style
+    code_style = styles['Code'].clone('CodeStyle')
+    code_style.fontSize = 8
+    code_style.fontName = 'Courier'
+    code_style.wordWrap = 'CJK'
+    code_style.backColor = colors.lightgrey
+    code_style.textColor = colors.black
 
     # Detailed Findings
-    story.append(Paragraph("What We Found", styles['Heading2']))
+    story.append(Paragraph("What We Found", styles['SectionHeading']))
     if vulnerabilities:
         # Group by severity for better organization
         for severity in ['Critical', 'High', 'Medium', 'Low', 'Info']:
             severity_vulns = [v for v in vulnerabilities if v[4] == severity]
             if severity_vulns:
-                story.append(Paragraph(f"{severity} Severity Issues ({len(severity_vulns)})", styles['Heading3']))
+                # Set color based on severity
+                severity_color = colors.red
+                if severity == 'High':
+                    severity_color = colors.orange
+                elif severity == 'Medium':
+                    severity_color = colors.orange
+                elif severity == 'Low':
+                    severity_color = colors.green
+                elif severity == 'Info':
+                    severity_color = colors.blue
+                
+                # Create a custom style for this severity heading
+                severity_style = ParagraphStyle(
+                    name=f'{severity}Style',
+                    parent=styles['SubsectionHeading'],
+                    textColor=severity_color
+                )
+                
+                story.append(Paragraph(f"{severity} Severity Issues ({len(severity_vulns)})", severity_style))
                 story.append(Spacer(1, 6))
                 
                 data = [['File', 'Line', 'Issue', 'Context']]
@@ -1178,15 +1472,27 @@ def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf', tem
                     safe_snippet = str(snippet)
                     if len(safe_snippet) > 60:
                         safe_snippet = safe_snippet[:60] + '...'
+                    
                     # Escape any special characters that might cause XML parsing issues
                     safe_snippet = safe_snippet.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    
+                    # Get remediation suggestion
+                    remediation = get_remediation_suggestion(desc)
                     
                     # Use Paragraph objects for all cells to enable word wrapping
                     data.append([
                         Paragraph(relative_path, file_style),
                         str(line_num),
                         Paragraph(desc, cell_style),
-                        Paragraph(safe_snippet, cell_style)
+                        Paragraph(f'<font face="Courier" size="8" color="#000080">{safe_snippet}</font>', code_style)
+                    ])
+                    
+                    # Add remediation as a separate row with a different background color
+                    data.append([
+                        Paragraph('<i>Remediation:</i>', cell_style),
+                        '',
+                        Paragraph(remediation, cell_style),
+                        ''
                     ])
                 
                 # Adjust column widths to better fit the content
@@ -1196,10 +1502,36 @@ def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf', tem
                     available_width * 0.08,  # Line column (8%)
                     available_width * 0.32,  # Issue column (32%)
                     available_width * 0.35   # Context column (35%)
-                ])
+                ], rowHeights=[20] + [30, 25] * len(severity_vulns))  # Increase row heights
+                
+                # Define row styles
+                row_styles = []
+                for i in range(len(severity_vulns)):
+                    # Header row
+                    if i == 0:
+                        row_styles.append(('BACKGROUND', (0, 0), (-1, 0), colors.darkblue))
+                        row_styles.append(('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke))
+                    
+                    # Data rows (alternating colors)
+                    data_row = i * 2 + 1  # Each vulnerability takes 2 rows (data + remediation)
+                    remediation_row = data_row + 1
+                    
+                    # Vulnerability row
+                    if i % 2 == 0:
+                        row_styles.append(('BACKGROUND', (0, data_row), (-1, data_row), colors.whitesmoke))
+                    else:
+                        row_styles.append(('BACKGROUND', (0, data_row), (-1, data_row), colors.lightgrey))
+                    
+                    # Remediation row
+                    row_styles.append(('BACKGROUND', (0, remediation_row), (-1, remediation_row), colors.lavender))
+                    row_styles.append(('SPAN', (2, remediation_row), (3, remediation_row)))  # Span remediation across columns
+                    
+                    # Add a thicker line between vulnerability groups
+                    if i < len(severity_vulns) - 1:
+                        row_styles.append(('LINEBELOW', (0, remediation_row), (-1, remediation_row), 1, colors.grey))
                 
                 table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                     ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
                     ('VALIGN', (0, 0), (-1, -1), 'TOP'),
@@ -1208,34 +1540,78 @@ def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf', tem
                     ('FONTSIZE', (0, 1), (-1, -1), 8),
                     ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                     ('WORDWRAP', (0, 0), (-1, -1), True),
-                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-                    ('TOPPADDING', (0, 0), (-1, -1), 4),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),  # Increased padding
+                    ('TOPPADDING', (0, 0), (-1, -1), 6),     # Increased padding
                     ('LEFTPADDING', (0, 0), (-1, -1), 4),
                     ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-                ]))
+                ] + row_styles))
+                
                 story.append(table)
                 story.append(Spacer(1, 12))
     else:
         story.append(Paragraph("Great news! No security issues were found in the scanned files.", styles['Normal']))
     story.append(Spacer(1, 12))
 
-    # Recommendations
-    story.append(Paragraph("What You Can Do", styles['Heading2']))
-    recommendations = [
-        "Avoid using risky functions like 'eval()' that can run harmful code.",
-        "Keep passwords and secrets out of your code—use secure storage instead.",
-        "Run this scan regularly to catch issues early.",
-        "Ask your team to follow safe coding habits."
+    # Remediation Guidance
+    story.append(Paragraph("Remediation Guidance", styles['SectionHeading']))
+    
+    # General remediation advice
+    remediation_text = """
+    This section provides general guidance for addressing the types of vulnerabilities found in your codebase. 
+    For specific remediation steps, refer to the individual findings in the detailed sections above.
+    """
+    story.append(Paragraph(remediation_text, styles['Normal']))
+    story.append(Spacer(1, 12))
+    
+    # Create a list of common remediation strategies
+    remediation_strategies = [
+        "Replace dangerous functions like eval() with safer alternatives. Use JSON.parse() for JSON data or dedicated parsers for specific formats.",
+        "Move sensitive data to environment variables or a secure vault/keystore service. Never commit credentials to version control.",
+        "Use subprocess.run() with shell=False and pass arguments as a list instead of a string. Validate and sanitize all user inputs.",
+        "Use proper output encoding and content security policies. Consider using template systems that auto-escape output.",
+        "Use parameterized queries or an ORM instead of string concatenation for SQL queries. Never trust user input in database operations.",
+        "Follow the principle of least privilege. Disable debug modes in production and ensure proper SSL verification.",
     ]
-    for rec in recommendations:
+    
+    # Add the remediation strategies as a list
+    for rec in remediation_strategies:
         story.append(Paragraph(f"• {rec}", styles['Normal']))
     story.append(Spacer(1, 12))
 
+    # Appendix: Scan Configuration
+    story.append(Paragraph("Appendix: Scan Configuration", styles['SectionHeading']))
+    
+    # Scan details
+    scan_details = f"""
+    <b>Repository URL:</b> {repo_url}<br/>
+    <b>Scan Date:</b> {scan_date}<br/>
+    <b>Tool Version:</b> GitHubScan 1.0<br/>
+    <b>Scan Type:</b> Static Code Analysis<br/>
+    """
+    story.append(Paragraph(scan_details, styles['Normal']))
+    story.append(Spacer(1, 12))
+    
+    # Glossary of terms
+    story.append(Paragraph("Glossary of Security Terms", styles['SubsectionHeading']))
+    
+    glossary_terms = [
+        "<b>SAST (Static Application Security Testing):</b> Analysis of source code to identify security vulnerabilities without executing the program.",
+        "<b>Code Injection:</b> A vulnerability that allows an attacker to insert and execute malicious code in an application.",
+        "<b>Cross-Site Scripting (XSS):</b> A vulnerability that allows attackers to inject client-side scripts into web pages viewed by other users.",
+        "<b>SQL Injection:</b> A code injection technique that exploits vulnerabilities in database-driven applications.",
+        "<b>Hardcoded Credentials:</b> Authentication data (passwords, API keys) embedded directly in source code.",
+        "<b>Command Injection:</b> A vulnerability that allows attackers to execute arbitrary commands on the host operating system.",
+    ]
+    
+    for term in glossary_terms:
+        story.append(Paragraph(f"• {term}", styles['Normal']))
+    
     # Footer
-    story.append(Paragraph("Note: This tool is very thorough, but it's always a good idea to have an expert double-check important systems.", styles['Italic']))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph("Note: This report was automatically generated by the GitHubScan security tool. While comprehensive, it's recommended to have security experts review critical findings.", styles['Italic']))
 
     doc.build(story)
-    logging.info(f"PDF report generated: {output_file}")
+    logging.info(f"Enhanced PDF report generated: {output_file}")
 
 def generate_github_workflow(output_path='.github/workflows/security-scan.yml'):
     """Generate a GitHub Actions workflow file for automated security scanning."""
