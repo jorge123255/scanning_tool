@@ -13,7 +13,7 @@ git add .
 
 # Commit changes
 echo -e "\nCommitting changes..."
-git commit -m "Fix PDF generation issues and test with DVWA repository"
+git commit -m "Improve PDF report layout and readability"
 
 # Push to GitHub
 echo -e "\nPushing to GitHub..."

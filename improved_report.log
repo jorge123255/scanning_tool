@@ -1,0 +1,17 @@
+2025-03-04 10:17:45 - INFO: Starting scan for: https://github.com/digininja/DVWA.git
+2025-03-04 10:17:45 - INFO: Scanning files for security issues...
+2025-03-04 10:17:45 - WARNING: eslint not installed. Install it with: npm install -g eslint
+2025-03-04 10:17:45 - WARNING: eslint not installed. Install it with: npm install -g eslint
+2025-03-04 10:17:45 - WARNING: eslint not installed. Install it with: npm install -g eslint
+2025-03-04 10:17:45 - WARNING: eslint not installed. Install it with: npm install -g eslint
+2025-03-04 10:17:45 - WARNING: eslint not installed. Install it with: npm install -g eslint
+2025-03-04 10:17:45 - WARNING: eslint not installed. Install it with: npm install -g eslint
+2025-03-04 10:17:45 - WARNING: eslint not installed. Install it with: npm install -g eslint
+2025-03-04 10:17:45 - WARNING: eslint not installed. Install it with: npm install -g eslint
+2025-03-04 10:17:45 - WARNING: eslint not installed. Install it with: npm install -g eslint
+2025-03-04 10:17:45 - INFO: Skipping git history analysis to save time
+2025-03-04 10:17:45 - INFO: Scanning for license information...
+2025-03-04 10:17:45 - INFO: Scanning infrastructure-as-code files...
+2025-03-04 10:17:45 - INFO: Scanning web framework configurations...
+2025-03-04 10:17:45 - INFO: PDF report generated: report.pdf
+2025-03-04 10:17:45 - INFO: Scan completed and temporary files cleaned up.

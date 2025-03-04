@@ -1103,7 +1103,7 @@ def enrich_vulnerabilities(vulnerabilities):
 
 def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf', temp_dir=None):
     """Generate a professional PDF report of the findings, designed for non-technical audiences."""
-    doc = SimpleDocTemplate(output_file, pagesize=letter)
+    doc = SimpleDocTemplate(output_file, pagesize=letter, leftMargin=0.5*inch, rightMargin=0.5*inch)
     styles = getSampleStyleSheet()
     story = []
 
@@ -1139,6 +1139,18 @@ def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf', tem
     story.append(Paragraph(f"Risk Score: {normalized_score:.1f}/100 ({risk_level} Risk)", styles['Normal']))
     story.append(Spacer(1, 12))
 
+    # Create a custom style for table cells with word wrapping
+    cell_style = styles['Normal'].clone('CellStyle')
+    cell_style.wordWrap = 'CJK'
+    cell_style.fontSize = 8
+    
+    # Create a file path style that allows breaking
+    file_style = styles['Normal'].clone('FileStyle')
+    file_style.wordWrap = 'CJK'
+    file_style.fontSize = 8
+    file_style.allowWidows = 1
+    file_style.allowOrphans = 1
+
     # Detailed Findings
     story.append(Paragraph("What We Found", styles['Heading2']))
     if vulnerabilities:
@@ -1164,24 +1176,42 @@ def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf', tem
                     
                     # Sanitize snippet to avoid XML parsing issues
                     safe_snippet = str(snippet)
-                    if len(safe_snippet) > 50:
-                        safe_snippet = safe_snippet[:50] + '...'
+                    if len(safe_snippet) > 60:
+                        safe_snippet = safe_snippet[:60] + '...'
                     # Escape any special characters that might cause XML parsing issues
                     safe_snippet = safe_snippet.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                     
-                    data.append([relative_path, str(line_num), desc, Paragraph(safe_snippet, styles['Normal'])])
+                    # Use Paragraph objects for all cells to enable word wrapping
+                    data.append([
+                        Paragraph(relative_path, file_style),
+                        str(line_num),
+                        Paragraph(desc, cell_style),
+                        Paragraph(safe_snippet, cell_style)
+                    ])
                 
-                table = Table(data, colWidths=[1.5*inch, 0.5*inch, 2*inch, 2*inch])
+                # Adjust column widths to better fit the content
+                available_width = doc.width
+                table = Table(data, colWidths=[
+                    available_width * 0.25,  # File column (25%)
+                    available_width * 0.08,  # Line column (8%)
+                    available_width * 0.32,  # Issue column (32%)
+                    available_width * 0.35   # Context column (35%)
+                ])
+                
                 table.setStyle(TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                     ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, 0), 12),
-                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                    ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
                     ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 10),
+                    ('FONTSIZE', (0, 1), (-1, -1), 8),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                    ('WORDWRAP', (0, 0), (-1, -1), True),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                    ('TOPPADDING', (0, 0), (-1, -1), 4),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 4),
                 ]))
                 story.append(table)
                 story.append(Spacer(1, 12))
