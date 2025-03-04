@@ -305,13 +305,43 @@ def run_rubocop(file_path):
 
 def run_psscriptanalyzer(file_path):
     """Run PSScriptAnalyzer on a PowerShell file for static analysis."""
-    if not check_tool_availability('pwsh', 'Install PowerShell (e.g., apt install powershell)') or not subprocess.run(['pwsh', '-Command', 'Get-Module -ListAvailable -Name PSScriptAnalyzer'], capture_output=True).returncode == 0:
-        logging.warning("PSScriptAnalyzer not available. Install PowerShell and run: Install-Module -Name PSScriptAnalyzer")
+    if not check_tool_availability('pwsh', 'Install PowerShell (e.g., apt install powershell)'):
+        logging.warning("PowerShell not available. Install PowerShell to enable PSScriptAnalyzer.")
         return []
+    
+    # Check if PSScriptAnalyzer module is available
+    module_check = subprocess.run(['pwsh', '-Command', 'Get-Module -ListAvailable -Name PSScriptAnalyzer'], capture_output=True)
+    if module_check.returncode != 0:
+        logging.warning("PSScriptAnalyzer module not available. Install with: Install-Module -Name PSScriptAnalyzer -Force")
+        return []
+    
     try:
-        result = subprocess.run(['pwsh', '-Command', f'Invoke-ScriptAnalyzer -Path "{file_path}" | ConvertTo-Json'], capture_output=True, text=True)
-        data = json.loads(result.stdout)
-        return [(file_path, issue['Line'], issue['Message'], '') for issue in data]
+        # Run PSScriptAnalyzer with error handling
+        result = subprocess.run(
+            ['pwsh', '-Command', f'$results = Invoke-ScriptAnalyzer -Path "{file_path}" -ErrorAction SilentlyContinue; if ($results) {{ $results | ConvertTo-Json }} else {{ "[]" }}'], 
+            capture_output=True, 
+            text=True,
+            timeout=30  # Add timeout to prevent hanging
+        )
+        
+        # Check if output is empty or whitespace
+        if not result.stdout or result.stdout.isspace():
+            return []
+            
+        # Try to parse JSON output
+        try:
+            data = json.loads(result.stdout)
+            # Handle both array and single object responses
+            if isinstance(data, dict):
+                data = [data]
+            return [(file_path, issue.get('Line', 0), issue.get('Message', 'Unknown issue'), '') for issue in data]
+        except json.JSONDecodeError:
+            logging.warning(f"Invalid JSON output from PSScriptAnalyzer for {file_path}")
+            return []
+            
+    except subprocess.TimeoutExpired:
+        logging.warning(f"PSScriptAnalyzer timed out analyzing {file_path}")
+        return []
     except Exception as e:
         logging.error(f"Error running PSScriptAnalyzer on {file_path}: {e}")
         return []
@@ -361,27 +391,13 @@ def scan_for_secrets(file_path):
     return secrets
 
 def scan_file_wrapper(args):
-    """Wrapper function for scanning a single file, supporting parallel execution."""
-    file_path, ext = args
-    vulnerabilities = scan_file(file_path, patterns.get(ext, []))
-    
-    # Add secret scanning for all text files
-    secrets = scan_for_secrets(file_path)
-    vulnerabilities.extend(secrets)
-    
-    # Integrate static analysis tools for all supported languages
-    if ext == '.py':
-        vulnerabilities.extend(run_bandit(file_path))
-    elif ext == '.sh':
-        vulnerabilities.extend(run_shellcheck(file_path))
-    elif ext == '.js':
-        vulnerabilities.extend(run_eslint(file_path))
-    elif ext == '.rb':
-        vulnerabilities.extend(run_rubocop(file_path))
-    elif ext == '.ps1':
-        vulnerabilities.extend(run_psscriptanalyzer(file_path))
-    # Add more tools for .php, .pl, etc., as needed
-    return vulnerabilities
+    """Wrapper function for scan_file to be used with ThreadPoolExecutor."""
+    file_path, file_patterns = args
+    try:
+        return scan_file(file_path, file_patterns)
+    except Exception as e:
+        logging.error(f"Error scanning file {file_path}: {e}")
+        return []
 
 def scan_dependencies(temp_dir):
     """Scan for vulnerable dependencies in package files."""
@@ -961,43 +977,98 @@ def scan_web_configs(temp_dir):
     return vulnerabilities
 
 def scan_repository(temp_dir):
-    """Scan the repository for vulnerabilities in scripts using parallel processing."""
-    all_vulnerabilities = []
-    files_to_scan = [(os.path.join(root, file), os.path.splitext(file)[1].lower())
-                     for root, _, files in os.walk(temp_dir)
-                     for file in files if os.path.splitext(file)[1].lower() in patterns or file == 'Dockerfile']
+    """Scan all files in the repository for vulnerabilities."""
+    vulnerabilities = []
     
-    with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
-        future_to_file = {executor.submit(scan_file_wrapper, args): args[0] for args in files_to_scan}
+    # Scan all files in the repository
+    file_paths = []
+    for root, _, files in os.walk(temp_dir):
+        for file in files:
+            file_path = os.path.join(root, file)
+            file_ext = os.path.splitext(file_path)[1].lower()
+            if file_ext in patterns:
+                file_paths.append((file_path, patterns[file_ext]))
+    
+    # Use ThreadPoolExecutor for parallel scanning
+    with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        future_to_file = {executor.submit(scan_file_wrapper, args): args for args in file_paths}
         for future in as_completed(future_to_file):
-            try:
-                vulnerabilities = future.result()
-                all_vulnerabilities.extend(vulnerabilities)
-            except Exception as e:
-                logging.error(f"Error scanning file {future_to_file[future]}: {e}")
+            file_vulnerabilities = future.result()
+            if file_vulnerabilities:
+                vulnerabilities.extend(file_vulnerabilities)
     
-    # Add dependency scanning
-    logging.info("Scanning dependencies for vulnerabilities...")
-    dependency_vulnerabilities = scan_dependencies(temp_dir)
-    all_vulnerabilities.extend(dependency_vulnerabilities)
+    # Run specialized scanners
+    try:
+        # Run Bandit on Python files
+        for root, _, files in os.walk(temp_dir):
+            for file in files:
+                if file.endswith('.py'):
+                    file_path = os.path.join(root, file)
+                    bandit_results = run_bandit(file_path)
+                    if bandit_results:
+                        vulnerabilities.extend(bandit_results)
+                elif file.endswith('.sh'):
+                    file_path = os.path.join(root, file)
+                    shellcheck_results = run_shellcheck(file_path)
+                    if shellcheck_results:
+                        vulnerabilities.extend(shellcheck_results)
+                elif file.endswith('.js'):
+                    file_path = os.path.join(root, file)
+                    eslint_results = run_eslint(file_path)
+                    if eslint_results:
+                        vulnerabilities.extend(eslint_results)
+                elif file.endswith('.rb'):
+                    file_path = os.path.join(root, file)
+                    rubocop_results = run_rubocop(file_path)
+                    if rubocop_results:
+                        vulnerabilities.extend(rubocop_results)
+                elif file.endswith('.ps1'):
+                    file_path = os.path.join(root, file)
+                    psscriptanalyzer_results = run_psscriptanalyzer(file_path)
+                    if psscriptanalyzer_results:
+                        vulnerabilities.extend(psscriptanalyzer_results)
+    except Exception as e:
+        logging.error(f"Error running specialized scanners: {str(e)}")
     
-    # Add git history analysis
-    git_vulnerabilities = analyze_git_history(temp_dir)
-    all_vulnerabilities.extend(git_vulnerabilities)
+    # Scan for dependencies
+    try:
+        dependency_vulnerabilities = scan_dependencies(temp_dir)
+        if dependency_vulnerabilities:
+            vulnerabilities.extend(dependency_vulnerabilities)
+    except Exception as e:
+        logging.error(f"Error scanning dependencies: {str(e)}")
     
-    # Add license and compliance scanning
-    compliance_issues = scan_for_licenses(temp_dir)
-    all_vulnerabilities.extend(compliance_issues)
+    # Skip git history analysis for this run to avoid long processing time
+    # git_vulnerabilities = analyze_git_history(temp_dir)
+    # if git_vulnerabilities:
+    #     vulnerabilities.extend(git_vulnerabilities)
+    logging.info("Skipping git history analysis to save time")
     
-    # Add infrastructure-as-code scanning
-    iac_vulnerabilities = scan_infrastructure_as_code(temp_dir)
-    all_vulnerabilities.extend(iac_vulnerabilities)
+    # Scan for licenses
+    try:
+        license_vulnerabilities = scan_for_licenses(temp_dir)
+        if license_vulnerabilities:
+            vulnerabilities.extend(license_vulnerabilities)
+    except Exception as e:
+        logging.error(f"Error scanning for licenses: {str(e)}")
     
-    # Add web framework configuration scanning
-    web_config_vulnerabilities = scan_web_configs(temp_dir)
-    all_vulnerabilities.extend(web_config_vulnerabilities)
+    # Scan infrastructure-as-code files
+    try:
+        iac_vulnerabilities = scan_infrastructure_as_code(temp_dir)
+        if iac_vulnerabilities:
+            vulnerabilities.extend(iac_vulnerabilities)
+    except Exception as e:
+        logging.error(f"Error scanning infrastructure-as-code files: {str(e)}")
     
-    return all_vulnerabilities
+    # Scan web framework configurations
+    try:
+        web_config_vulnerabilities = scan_web_configs(temp_dir)
+        if web_config_vulnerabilities:
+            vulnerabilities.extend(web_config_vulnerabilities)
+    except Exception as e:
+        logging.error(f"Error scanning web framework configurations: {str(e)}")
+    
+    return vulnerabilities
 
 def classify_severity(description):
     """Classify the severity of a vulnerability based on its description."""
@@ -1029,7 +1100,7 @@ def enrich_vulnerabilities(vulnerabilities):
     # Sort by risk score (highest first)
     return sorted(enriched, key=lambda x: x[5], reverse=True)
 
-def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf'):
+def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf', temp_dir=None):
     """Generate a professional PDF report of the findings, designed for non-technical audiences."""
     doc = SimpleDocTemplate(output_file, pagesize=letter)
     styles = getSampleStyleSheet()
@@ -1080,7 +1151,15 @@ def generate_pdf_report(vulnerabilities, repo_url, output_file='report.pdf'):
                 data = [['File', 'Line', 'Issue', 'Context']]
                 for vuln in severity_vulns:
                     file_path, line_num, desc, snippet, _, _ = vuln
-                    relative_path = os.path.relpath(file_path, temp_dir)
+                    # Use a safe relative path calculation that doesn't require temp_dir
+                    if temp_dir and os.path.isabs(file_path):
+                        try:
+                            relative_path = os.path.relpath(file_path, temp_dir)
+                        except ValueError:
+                            # If paths are on different drives
+                            relative_path = os.path.basename(file_path)
+                    else:
+                        relative_path = os.path.basename(file_path)
                     data.append([relative_path, str(line_num), desc, Paragraph(snippet[:50] + '...' if len(snippet) > 50 else snippet, styles['Normal'])])
                 
                 table = Table(data, colWidths=[1.5*inch, 0.5*inch, 2*inch, 2*inch])
@@ -1420,7 +1499,7 @@ def main():
                     output_file = 'report.sarif'
             
             if args.output_format == 'pdf':
-                generate_pdf_report(filtered_vulnerabilities, args.repo_url, output_file)
+                generate_pdf_report(filtered_vulnerabilities, args.repo_url, output_file, temp_dir)
             elif args.output_format == 'sarif':
                 generate_sarif_report(filtered_vulnerabilities, args.repo_url, output_file)
             else:

@@ -1,0 +1,20 @@
+2025-03-04 09:31:36 - INFO: Starting scan for: https://github.com/Micke-K/IntuneManagement.git
+2025-03-04 09:31:39 - INFO: Scanning files for security issues...
+2025-03-04 09:31:39 - ERROR: Error running PSScriptAnalyzer on /var/folders/1x/8mgj9spd2gqb5s_t627pkw640000gn/T/tmp5wk34x7b/Scripts/Export-ExcryptionKeys.ps1: Expecting value: line 1 column 1 (char 0)
+2025-03-04 09:31:39 - ERROR: Error running PSScriptAnalyzer on /var/folders/1x/8mgj9spd2gqb5s_t627pkw640000gn/T/tmp5wk34x7b/Start-IntuneManagement.ps1: Expecting value: line 1 column 1 (char 0)
+2025-03-04 09:31:39 - INFO: Scanning dependencies for vulnerabilities...
+2025-03-04 09:31:39 - INFO: Analyzing git history for sensitive information...
+2025-03-04 09:32:32 - INFO: Scanning for license information...
+2025-03-04 09:32:32 - INFO: Scanning infrastructure-as-code files...
+2025-03-04 09:32:32 - INFO: Scanning web framework configurations...
+2025-03-04 09:32:32 - INFO: Scan completed and temporary files cleaned up.
+Traceback (most recent call last):
+  File "/Users/georgeszulc/GitHubScan/githubscan.py", line 1470, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/Users/georgeszulc/GitHubScan/githubscan.py", line 1423, in main
+    generate_pdf_report(filtered_vulnerabilities, args.repo_url, output_file)
+  File "/Users/georgeszulc/GitHubScan/githubscan.py", line 1083, in generate_pdf_report
+    relative_path = os.path.relpath(file_path, temp_dir)
+                                               ^^^^^^^^
+NameError: name 'temp_dir' is not defined
